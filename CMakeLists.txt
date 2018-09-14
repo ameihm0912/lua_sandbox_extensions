@@ -86,6 +86,7 @@ libinjection
 lfs
 lpeg
 lsb
+lustache
 maxminddb
 moz_ingest
 moz_logging

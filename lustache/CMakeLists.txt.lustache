@@ -1,0 +1,29 @@
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at http://mozilla.org/MPL/2.0/.
+
+cmake_minimum_required(VERSION 3.6 FATAL_ERROR)
+project(lustache VERSION 0.0.1 LANGUAGES C)
+
+set(CPACK_PACKAGE_NAME luasandbox-${PROJECT_NAME})
+set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "Lua Mustache Templating Module")
+set(CPACK_PACKAGE_VERSION_MAJOR ${PROJECT_VERSION_MAJOR})
+set(CPACK_PACKAGE_VERSION_MINOR ${PROJECT_VERSION_MINOR})
+set(CPACK_PACKAGE_VERSION_PATCH ${PROJECT_VERSION_PATCH})
+set(CPACK_PACKAGE_VENDOR        "Mozilla Services")
+set(CPACK_PACKAGE_CONTACT       "Aaron Meihm <ameihm@mozilla.com>")
+set(CPACK_OUTPUT_CONFIG_FILE    "${CMAKE_BINARY_DIR}/${PROJECT_NAME}.cpack")
+set(CPACK_STRIP_FILES           TRUE)
+set(CPACK_DEBIAN_FILE_NAME      "DEB-DEFAULT")
+set(CPACK_RPM_FILE_NAME         "RPM-DEFAULT")
+
+set(CPACK_RPM_PACKAGE_LICENSE    "MIT License")
+
+include(CPack)
+
+set(DPERMISSION DIRECTORY_PERMISSIONS OWNER_READ OWNER_WRITE OWNER_EXECUTE GROUP_READ GROUP_EXECUTE WORLD_READ WORLD_EXECUTE)
+set(EMPTY_DIR ${CMAKE_BINARY_DIR}/empty)
+file(MAKE_DIRECTORY ${EMPTY_DIR})
+install(DIRECTORY ${EMPTY_DIR}/ DESTINATION ${INSTALL_MODULE_PATH} ${DPERMISSION})
+install(FILES src/lustache.lua DESTINATION ${INSTALL_MODULE_PATH})
+install(DIRECTORY src/lustache DESTINATION ${INSTALL_MODULE_PATH})
