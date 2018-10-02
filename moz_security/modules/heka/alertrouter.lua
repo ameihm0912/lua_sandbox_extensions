@@ -70,17 +70,20 @@ alert = {
 
 local string    = require "string"
 local table     = require "table"
+local lustache  = require "lustache"
 
-local module_name = string.match(..., "%.([^.]+)$")
-
-local cfg   = read_config("alert")
-cfg         = cfg.modules[module_name]
+local module_name   = ...
+local module_cfg    = require "string".gsub(module_name, "%.", "_")
+local cfg           = read_config(module_cfg) or error(module_cfg .. " configuration not found")
 
 local pairs     = pairs
 local ipairs    = ipairs
 local error     = error
+local type      = type
 
-assert(type(cfg) == "table", "alert.modules." .. module_name .. " configuration must be a table")
+-- XXX
+local print = print
+local jenc = require "cjson".encode
 
 local M = {}
 setfenv(1, M)
@@ -99,99 +102,109 @@ if cfg.subjects then
 end
 
 
-local function lalias(user)
-    if not user then return nil, nil end
-    local x = cfg.subjects
-    if not x then return nil, nil end
-
-    for k,v in pairs(x) do
-        if v.mapfrom and v.mapfrom[user] then return k, v end
-    end
-    return nil, nil
-end
-
-
-local function vget(cat, el, u, udata)
-    local use
-    if udata then
-        if udata[cat] then use = udata[cat][el] end
-    end
-    if not use then -- no user specific element, try cfg wide
-        if cfg[cat] then use = cfg[cat][el] end
-    end
-    if not use then return nil end
-    if cat == "email" then use = string.format("<%s>", use) end
-    if string.find(use, "%%s") then
-        if not u then return nil end
-        return string.format(use, u)
-    end
-    return use
-end
-
-
-function get_message(id, summary, detail, ldata)
-    local msg = {
+local function alert_template()
+    return {
         Type        = "alert",
-        Payload     = detail,
+        Payload     = nil,
         Severity    = 1,
 
         Fields = {
-            { name = "id", value = id },
-            { name = "summary", value = summary },
+            {name = "id", value = nil},
+            {name = "summary", value = nil}
         }
     }
-    local findex = 3
+end
 
-    local eur
-    local eer
-    local egr
-    local iut
-    local igt
-    local iet
 
-    local u, udata = lalias(ldata.subject)
+local function vdestfmt(v, t, s)
+    if not v then return nil end
+    if t == "email" then v = string.format("<%s>", v) end
+    if string.find(v, "%%s") then
+        if not s then return nil end
+        v = string.format(v, s)
+    end
+    return v
+end
 
-    if u and ldata.senduser then
-        eur = vget("email", "direct", u, udata)
-        iut = vget("irc", "direct", u, udata)
+
+function atypes(adata, template)
+    local notifytypes = {"email", "irc"}
+    local subjcfg
+    if adata.subject then subjcfg = cfg.subjects[adata.subject] end
+
+    local ret = {}
+
+    for _,v in ipairs(notifytypes) do
+        ret[v] = {}
+        if subjcfg and subjcfg[v] then
+            if subjcfg[v].templates and subjcfg[v].templates[template] then
+                ret[v].summary = subjcfg[v].templates[template].summary
+                ret[v].body = subjcfg[v].templates[template].body
+            end
+            ret[v].direct = vdestfmt(subcfg[v].direct, v, adata.subject)
+            ret[v].global = vdestfmt(subcfg[v].global, v, adata.subject)
+            ret[v].error = vdestfmt(subcfg[v].error, v, adata.subject)
+        end
+        if cfg[v] then
+            if not ret[v].summary then
+                if cfg[v].templates and cfg[v].templates[template] then
+                    ret[v].summary = cfg[v].templates[template].summary
+                    ret[v].body = cfg[v].templates[template].body
+                end
+            end
+            if not ret[v].direct then ret[v].direct = vdestfmt(cfg[v].direct, v, adata.subject) end
+            if not ret[v].global then ret[v].global = vdestfmt(cfg[v].global, v, adata.subject) end
+            if not ret[v].error then ret[v].error = vdestfmt(cfg[v].error, v, adata.subject) end
+        end
     end
 
-    if ldata.senderror then
-        eer = vget("email", "error", u, udata)
-        iet = vget("irc", "error", u, udata)
+    return ret
+end
+
+
+function atypes_resolve(adata, a)
+    local ret = {}
+    for k,v in pairs(a) do
+        local nent = {dest = {}}
+        if adata.notify_global then table.insert(nent.dest, v.global) end
+        if adata.notify_direct then table.insert(nent.dest, v.direct) end
+        if adata.notify_error then table.insert(nent.dest, v.error) end
+        nent.summary = v.summary
+        nent.body = v.body
+        if #nent.dest > 0 then ret[k] = nent end
+    end
+    return ret
+end
+
+
+function get_alerts(adata, template)
+    local ret = {}
+
+    for i,v in ipairs(adata) do
+        local a = atypes_resolve(v, atypes(v, template))
+
+        for k,w in pairs(a) do
+            if not w.summary then return nil, "no resolved summary for alert" end
+            local summary = lustache:render(w.summary, v.parameters)
+            if type(summary) ~= "string" then return nil, "template rendering failed for summary" end
+
+            if not w.body then return nil, "no resolved body for alert" end
+            local body = lustache:render(w.body, v.parameters)
+            if type(body) ~= "string" then return nil, "template rendering failed for body" end
+
+            local newa = alert_template()
+            if k == "email" then -- special handling for email, can support multiple destinations
+                newa.Fields[1].value = summary
+                newa.Fields[2].value = summary
+                newa.Fields[3] = {name = "email.recipients", value = w.dest}
+                newa.Payload = body
+            else
+            end
+            table.insert(ret, newa)
+        end
     end
 
-    if ldata.sendglobal then
-        egr = vget("email", "global", u, udata)
-        igt = vget("irc", "global", u, udata)
-    end
-
-    if not eur and not eer and not egr
-        and not iut and not igt and not iet then
-        return nil -- no alert to send
-    end
-
-    if eur or eer or egr then -- email alerts
-        local n = {}
-        if eer then table.insert(n, eer) end
-        if egr then table.insert(n, egr) end
-        if eur then table.insert(n, eur) end
-        msg.Fields[findex] = { name = "email.recipients", value = n }
-        findex = findex + 1
-    end
-
-    -- only support a single irc target, prioritize user, error, then global
-    local itv
-    if iut then
-        itv = iut
-    elseif iet then
-        itv = iet
-    elseif igt then
-        itv = igt
-    end
-    if itv then msg.Fields[findex] = { name = "irc.target", value = itv } end
-
-    return msg
+    return ret
 end
 
 return M

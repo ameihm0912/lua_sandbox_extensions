@@ -146,9 +146,7 @@ require "table"
 
 local HUGE      = require "math".huge
 local selprinc  = require "heka.selprinc"
-local alert     = require "heka.alert"
-
-if not alert.has_lookup() then error("alerting configuration must use lookup function") end
+local arouter   = require "heka.alertrouter"
 
 local user_notify               = read_config("user_notify")
 local drift_notify              = read_config("drift_notify")
@@ -250,11 +248,22 @@ function process_message()
     -- the alert message with the default information.
     local subject = string.format("%s %s auth %s track:[%s]", user, sm.category, hn, track)
     local payload = ""
-    local ldata = {
-        sendglobal  = true,
-        senduser    = false,
-        senderror   = false,
-        subject     = user,
+    local routerdata = {
+        {
+            notify_global   = true,
+            notify_direct   = false,
+            notify_error    = false,
+            subject         = user,
+
+            parameters = {
+                subject     = user,
+                category    = sm.category,
+                dest        = hn,
+                track       = track,
+                cephost     = cephost,
+                timestamp   = os.date("%Y-%m-%d %H:%M:%S", ts)
+            }
+        }
     }
 
     -- If we also have city and country information, add that to the subject
@@ -263,10 +272,12 @@ function process_message()
     end
 
     -- If escalate is set, add some additional information to the message
+    local template = "notice"
     if escalate then
         subject = "LASTX_NEWATTR " .. subject
         payload = "Escalation flag set, authentication with new tracking attributes\n"
-        if user_notify then ldata.senduser = true end
+        if user_notify then routerdata[1].notify_direct = true end
+        template = "alert"
     end
 
     -- Add some additional details to the message body
@@ -279,9 +290,9 @@ function process_message()
         if not drift_notify then return -1, "dropping event with time drift" end
         payload = payload .. string.format("WARNING, unacceptable drift %d seconds\n", delaysec)
 
-        ldata.sendglobal    = false
-        ldata.senduser      = false
-        ldata.senderror     = true
+        routerdata[1].notify_global = false
+        routerdata[1].notify_direct = false
+        routerdata[1].notify_error  = true
     end
 
     if secm then
@@ -293,7 +304,10 @@ function process_message()
         secm:send()
     end
 
-    alert.send("auth_lastx", subject, payload, 0, ldata)
+    local amsg = arouter.get_alerts(routerdata, template)
+    for _,v in ipairs(amsg) do
+        inject_message(v)
+    end
     return 0
 end
 
